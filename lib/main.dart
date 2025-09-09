@@ -1,4 +1,4 @@
-import 'dart:async';
+import 'dart:async'; // Tambahkan import ini
 import 'package:flutter/material.dart';
 import 'package:flutter_map/flutter_map.dart';
 import 'package:latlong2/latlong.dart';
@@ -15,7 +15,7 @@ class MyApp extends StatelessWidget {
   Widget build(BuildContext context) {
     return MaterialApp(
       debugShowCheckedModeBanner: false,
-      title: 'Absensi Map Real-time',
+      title: 'Absensi Map',
       theme: ThemeData(primarySwatch: Colors.blue),
       home: const MapPage(),
     );
@@ -30,25 +30,38 @@ class MapPage extends StatefulWidget {
 }
 
 class _MapPageState extends State<MapPage> {
-  static const markerPoint = LatLng(-8.118320, 111.922468);
-  LatLng? userPoint;
+  static const markerPoint = LatLng(-8.118368, 111.922317);
+  LatLng? userPoint; // posisi user
   String status = "Menunggu lokasi...";
-  StreamSubscription<Position>? positionStream;
+  StreamSubscription<Position>? positionStreamSubscription;
+  MapController mapController = MapController();
 
   @override
   void initState() {
     super.initState();
-    _checkPermissionAndStartTracking();
+    _checkLocation();
   }
 
-  Future<void> _checkPermissionAndStartTracking() async {
-    bool serviceEnabled = await Geolocator.isLocationServiceEnabled();
+  @override
+  void dispose() {
+    // Batalkan subscription ketika widget dihapus
+    positionStreamSubscription?.cancel();
+    super.dispose();
+  }
+
+  Future<void> _checkLocation() async {
+    bool serviceEnabled;
+    LocationPermission permission;
+
+    // cek GPS nyala
+    serviceEnabled = await Geolocator.isLocationServiceEnabled();
     if (!serviceEnabled) {
       setState(() => status = "GPS tidak aktif");
       return;
     }
 
-    LocationPermission permission = await Geolocator.checkPermission();
+    // cek izin lokasi
+    permission = await Geolocator.checkPermission();
     if (permission == LocationPermission.denied) {
       permission = await Geolocator.requestPermission();
       if (permission == LocationPermission.denied) {
@@ -62,57 +75,83 @@ class _MapPageState extends State<MapPage> {
       return;
     }
 
+    // Mulai melacak pergerakan user secara real-time
     _startTracking();
   }
 
   void _startTracking() {
     const locationSettings = LocationSettings(
-      accuracy: LocationAccuracy.high,
-      distanceFilter: 1, // update setiap user bergerak >1 meter
+      accuracy: LocationAccuracy.best,
+      distanceFilter: 1, // Update setiap 1 meter perpindahan
     );
 
-    positionStream =
+    positionStreamSubscription =
         Geolocator.getPositionStream(locationSettings: locationSettings).listen(
-          (Position pos) {
-            final userLatLng = LatLng(pos.latitude, pos.longitude);
-            final distance = Distance().as(
-              LengthUnit.Meter,
-              userLatLng,
-              markerPoint,
-            );
-
+          (Position position) {
             setState(() {
-              userPoint = userLatLng;
-              status = distance <= 5
-                  ? "✅ Berada dalam radius 5 meter (ABSENSI VALID)"
+              userPoint = LatLng(position.latitude, position.longitude);
+
+              // Hitung jarak user ke marker
+              final distance = Distance().as(
+                LengthUnit.Meter,
+                userPoint!,
+                markerPoint,
+              );
+
+              status = distance <= 2
+                  ? "✅ Berada dalam radius 2 meter (ABSENSI VALID)"
                   : "❌ Diluar radius (jarak: ${distance.toStringAsFixed(2)} m)";
             });
+
+            // Optionally, pan the map to follow the user
+            mapController.move(userPoint!, mapController.camera.zoom);
           },
         );
+
+    // Also get the initial position
+    Geolocator.getCurrentPosition().then((position) {
+      setState(() {
+        userPoint = LatLng(position.latitude, position.longitude);
+
+        // Hitung jarak user ke marker
+        final distance = Distance().as(
+          LengthUnit.Meter,
+          userPoint!,
+          markerPoint,
+        );
+
+        status = distance <= 2
+            ? "✅ Berada dalam radius 2 meter (ABSENSI VALID)"
+            : "❌ Diluar radius (jarak: ${distance.toStringAsFixed(2)} m)";
+      });
+    });
   }
 
-  @override
-  void dispose() {
-    positionStream?.cancel();
-    super.dispose();
+  void _stopTracking() {
+    positionStreamSubscription?.cancel();
+    setState(() {
+      status = "Pelacakan dihentikan";
+    });
   }
 
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      appBar: AppBar(title: const Text("Absensi dengan Radius Real-time")),
+      appBar: AppBar(title: const Text("Absensi dengan Radius")),
       body: Column(
         children: [
           Expanded(
             child: FlutterMap(
+              mapController: mapController,
               options: MapOptions(
                 initialCenter: markerPoint,
-                initialZoom: 20.0,
+                initialZoom: 18.0,
               ),
               children: [
                 TileLayer(
                   urlTemplate: 'https://tile.openstreetmap.org/{z}/{x}/{y}.png',
                 ),
+                // lingkaran radius 2 meter
                 CircleLayer(
                   circles: [
                     CircleMarker(
@@ -121,10 +160,11 @@ class _MapPageState extends State<MapPage> {
                       borderColor: Colors.blue,
                       borderStrokeWidth: 2,
                       useRadiusInMeter: true,
-                      radius: 5,
+                      radius: 2, // 2 meter
                     ),
                   ],
                 ),
+                // marker statis dan user
                 MarkerLayer(
                   markers: [
                     Marker(
@@ -161,11 +201,25 @@ class _MapPageState extends State<MapPage> {
               textAlign: TextAlign.center,
             ),
           ),
+          Row(
+            mainAxisAlignment: MainAxisAlignment.spaceAround,
+            children: [
+              ElevatedButton(
+                onPressed: _checkLocation,
+                child: const Text("Mulai Lacak"),
+              ),
+              ElevatedButton(
+                onPressed: _stopTracking,
+                style: ElevatedButton.styleFrom(
+                  backgroundColor: Colors.red,
+                  foregroundColor: Colors.white,
+                ),
+                child: const Text("Hentikan Lacak"),
+              ),
+            ],
+          ),
+          const SizedBox(height: 16),
         ],
-      ),
-      floatingActionButton: FloatingActionButton(
-        onPressed: _checkPermissionAndStartTracking,
-        child: const Icon(Icons.my_location),
       ),
     );
   }
